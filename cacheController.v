@@ -1,13 +1,13 @@
 module cacheController(
-//semnale de la cpu si spre
+	//semnale de la cpu si spre
 	input cpu_request,
 	input write_request,
 	input read_request,
 	input clk,
 	input reset,
-	input [31:0]adresa,
-//semnale de la cache si spre
-	input  [19*4 - 1:0] tags_from_cache,
+	input [31:0]address,
+	//semnale de la cache si spre
+	input [19*4 - 1:0]tags_from_cache,
 	input tags_delivered,
 	output request_memory_tags,
 	output [6:0]index
@@ -70,29 +70,29 @@ wire [18:0]wire_tag;
 register #(
 	.size_reg(32)
 )address_reg(
-	.data(adresa),
+	.data(address),
 	.write_data(idle_state),
-	.out_reg(address)
+	.out_reg(wire_address)
 );
 genvar i;
 generate
 	for(i = 0;i < 6; i = i + 1)
 		begin : offsetblock
-			buf(wire_offset[i],address[i]);
+			buf(wire_offset[i],wire_address[i]);
 		end
 endgenerate
 
 generate
 	for(i = 0;i < 7; i = i + 1)
 		begin : indexblock
-			buf(wire_index[i],address[i + 6]);
+			buf(wire_index[i],wire_address[i + 6]);
 		end
 endgenerate
 
 generate
 	for(i = 0;i < 19; i = i + 1)
 		begin : tagblock
-			buf(wire_tag[i],address[i + 13]);
+			buf(wire_tag[i],wire_address[i + 13]);
 		end
 endgenerate
 
@@ -111,11 +111,6 @@ and(
 	neg_out_reg_current_state[1],
 	out_reg_current_state[0]
 );
-and(
-wire write_miss = 1'b0;
-wire write_hit = 1'b0;
-wire read_miss = 1'b0;
-wire read_hit = 1'b0;
 
 //logica de request
 wire neg_tags_delivered;
@@ -124,19 +119,31 @@ and(request_memory_tags,compare_tag_state,neg_tags_delivered);
 
 //trimit index la cache doar daca request_memory_tags e 1 altfel X
 generate 
-	genvar i;
-	for(i = 0; i < 6; i = i + 1)
+	for(i = 0; i < 7; i = i + 1)
 		begin : equal
 			bufif1(index[i],wire_index[i],request_memory_tags);
 		end
 endgenerate
+
+//split input tags_from_cache in 4
+wire [18:0]tag_compare_in[0:3];
+generate 
+	for(i = 0; i < 19; i = i + 1)
+		begin : split_tags
+			buf(tag_compare_in[0][i],tags_from_cache[i]);
+			buf(tag_compare_in[1][i],tags_from_cache[i + 19]);
+			buf(tag_compare_in[2][i],tags_from_cache[i + 38]);
+			buf(tag_compare_in[3][i],tags_from_cache[i + 57]);
+		end
+endgenerate
+
 
 wire [3:0]out_comparatoare;
 Comparator #(
 	.size_data(19)
 )primul_tag(
 	.data_X(wire_tag),
-	.data_Y(index),
+	.data_Y(tag_compare_in[0]),
 	.result(out_comparatoare[0])
 );
 
@@ -144,7 +151,7 @@ Comparator #(
 	.size_data(19)
 )al_doilea_tag(
 	.data_X(wire_tag),
-	.data_Y(index),
+	.data_Y(tag_compare_in[1]),
 	.result(out_comparatoare[1])
 );
 
@@ -152,9 +159,42 @@ Comparator #(
 	.size_data(19)
 )al_treilea_tag(
 	.data_X(wire_tag),
-	.data_Y(index),
+	.data_Y(tag_compare_in[2]),
 	.result(out_comparatoare[2])
 );
+
+Comparator #(
+	.size_data(19)
+)al_patrulea_tag(
+	.data_X(wire_tag),
+	.data_Y(tag_compare_in[3]),
+	.result(out_comparatoare[3])
+);
+
+wire result_comparatoare;
+or(result_comparatoare,
+	out_comparatoare[0],
+	out_comparatoare[1],
+	out_comparatoare[2],
+	out_comparatoare[3]
+);
+wire neg_result_comparatoare;
+not(neg_result_comparatoare,result_comparatoare);
+
+//calcul pt read si write
+wire write_miss;
+wire write_hit;
+wire read_miss;
+wire read_hit;
+
+and(write_hit,write_request,result_comparatoare,compare_tag_state,tags_delivered);
+and(write_miss,write_request,neg_result_comparatoare,compare_tag_state,tags_delivered);
+and(read_hit,read_request,result_comparatoare,compare_tag_state,tags_delivered);
+and(read_miss,read_request,neg_result_comparatoare,compare_tag_state,tags_delivered);
+
+//
+wire stay_compare_tag;
+and(stay_compare_tag,neg_tags_delivered,compare_tag_state);
 
 //										READ HIT
 //VERIFICARE STARE
@@ -170,7 +210,7 @@ and(
 //										READ MISS
 //VERIFICARE STARE
 wire read_miss_state;
-
+and(
 	read_miss_state,//out
 	neg_out_reg_current_state[2],
 	out_reg_current_state[1],
@@ -221,7 +261,7 @@ or(data_next_state[0],
 	write_miss,			//trece in stare
 	read_miss,			//trece in stare
 	tranz_compare_tag,	//trece in stare
-	compare_tag_state,	//pastreaza starea
+	stay_compare_tag,	//pastreaza starea
 	read_miss_state,	//pastreaza starea
 	write_miss_state	//pastreaza starea
 );
