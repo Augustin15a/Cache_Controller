@@ -10,7 +10,7 @@ module cacheController_tb;
     reg reset;
     reg [31:0] address;
     
-    reg [19*4 - 1:0] tags_from_cache;
+    reg [75:0] tags_from_cache; // 19 biți * 4 căi = 76 biți
     reg tags_delivered;
     reg block_delivered;
     reg [511:0] block_data;
@@ -85,21 +85,23 @@ module cacheController_tb;
         .request_write_ram(request_write_ram)
     );
 
-    // --- Generare Ceas (Perioadă de 10ns) ---
+    // --- Generare Ceas ---
     always begin
         #5 clk = ~clk;
     end
 
-    // --- Blocul de Stimuli ---
+    // --- Blocul de Stimuli Complet ---
     initial begin
-        // 1. INIȚIALIZARE STRICTĂ (Eliminăm orice valoare de 'X')
+        // ==========================================
+        // 1. INIȚIALIZARE ȘI RESET
+        // ==========================================
         clk = 0;
         reset = 1;
         cpu_request = 0;
         write_request = 0;
         read_request = 0;
         address = 32'b0;
-        tags_from_cache = {19'b0, 19'b0, 19'b0, 19'b0};
+        tags_from_cache = 76'b0;
         tags_delivered = 0;
         block_delivered = 0;
         block_data = 512'b0;
@@ -112,60 +114,146 @@ module cacheController_tb;
         victim_dirty = 0;
         victim_tag = 19'b0;
 
-        // Așteptăm 2 ciclii de ceas complet în starea de Reset
         #20;
-        
-        // 2. SCOATERE DIN RESET (Pe frontul căzător al ceasului ca să evităm hazardul)
         @(negedge clk);
-        reset = 0;
+        reset = 0; // Scoatere din reset
         #10;
 
-        // 3. SCENARIU: CERERE DE CITIRE (READ REQUEST) de la CPU
+        // ==========================================
+        // TEST 1: READ MISS (Bloc curat în RAM)
+        // ==========================================
+        $display("\n========== TEST 1: READ MISS ==========");
         @(negedge clk);
         cpu_request = 1;
         read_request = 1;
-        address = 32'h00002048; // Adresa din log-ul tău
-
-        // FSM ar trebui să treacă în COMPARE_TAG în următorul ciclu
-        @(negedge clk);
-        // Oprim cererea de la CPU dacă controller-ul a preluat adresa în registru
-        cpu_request = 0; 
+        address = 32'h00002048; // Tag căutat = 19'h00001
         
-        // Simulăm că tag-urile sunt aduse din Cache Array
-        // Presupunem un TAG diferit ca să forțăm un READ MISS (ex: toate tag-urile din cache sunt 0)
-        tags_from_cache = {19'd0, 19'd0, 19'd0, 19'd0}; 
+        @(negedge clk);
+        cpu_request = 0;
+        tags_from_cache = {19'h7FFFF, 19'h5AAAA, 19'h3CCCC, 19'h11111}; // Forțăm MISS
         tags_delivered = 1;
 
-        // În acest moment, FSM vede că e MISS și verifică dacă block-ul vechi e Dirty
-        // Lăsăm victim_dirty = 0, deci ar trebui să sară direct în starea READ MISS (011)
         @(negedge clk);
-        tags_delivered = 0; // Resetăm semnalul de sincronizare cache
-
-        // Suntem în READ MISS. Așteptăm ca memoria RAM să răspundă cu blocul de date
+        tags_delivered = 0;
         #30; 
+
+        @(negedge clk);
+        block_delivered_ram = 1;
+        block_data_ram = {16{32'hAABBCCDD}}; 
+
+        @(negedge clk);
+        block_delivered_ram = 0;
+        newBlock_delivered = 1; 
+
+        @(negedge clk);
+        newBlock_delivered = 0; 
+        #20;
+		// ==========================================
+        // TEST 2: READ HIT
+        // ==========================================
+        $display("\n========== TEST 2: READ HIT ==========");
+        @(negedge clk);
+        cpu_request = 1;
+        read_request = 1;
+        address = 32'h00002048; 
+        
+        // Generăm HIT pe Calea 2
+        @(negedge clk);
+        cpu_request = 0;
+        tags_from_cache = {19'h7FFFF, 19'h00001, 19'h3CCCC, 19'h11111};
+        tags_delivered = 1;
+
+        @(negedge clk);
+        tags_delivered = 0;
+        
+        // FSM a intrat în starea 010 (READ HIT) și cere blocul (request_block = 1)
+        // Îi simulăm răspunsul de la Cache Array:
+        @(negedge clk);
+        block_delivered = 1;
+        block_data = {16{32'h55667788}}; // Date fictive din Cache
+
+        @(negedge clk);
+        block_delivered = 0; // Confirmare terminată, FSM revine în IDLE
+        #20;
+
+        // ==========================================
+        // TEST 3: READ MISS CU EVICT (DIRTY)
+        // ==========================================
+        $display("\n========== TEST 3: READ MISS CU EVICT (DIRTY) ==========");
+        @(negedge clk);
+        cpu_request = 1;
+        read_request = 1;
+        address = 32'h00004048; 
+        
+        @(negedge clk);
+        cpu_request = 0;
+        tags_from_cache = {19'h7FFFF, 19'h5AAAA, 19'h3CCCC, 19'h11111}; 
+        victim_dirty = 1;       // Linia este Dirty!
+        victim_tag = 19'h00009;   
+        lru_way = 2'b01;        
+        tags_delivered = 1;
+
+        @(negedge clk);
+        tags_delivered = 0;
+        
+        // FSM se duce în EVICT (110)
+        @(negedge clk);
+        block_delivered_ram = 1; // RAM confirmă scrierea blocului vechi
+
+        @(negedge clk);
+        block_delivered_ram = 0;
+        // FSM trece automat în READ MISS (011) pentru a aduce noul bloc
+        #20;
         
         @(negedge clk);
         block_delivered_ram = 1;
-        block_data_ram = {16{32'hAABBCCDD}}; // Umplem blocul cu o valoare test
+        block_data_ram = {16{32'h11223344}};
 
-        // Cache-ul intern confirmă scrierea noului bloc adus din RAM
         @(negedge clk);
         block_delivered_ram = 0;
         newBlock_delivered = 1;
 
-        // FSM ar trebui să se întoarcă în IDLE
         @(negedge clk);
-        newBlock_delivered = 0;
+        newBlock_delivered = 0; 
+        #20;
 
-        // Lăsăm simularea să ruleze puțin înainte de final
+        // ==========================================
+        // TEST 4: WRITE HIT (Scriere de la CPU)
+        // ==========================================
+        $display("\n========== TEST 4: WRITE HIT ==========");
+        @(negedge clk);
+        cpu_request = 1;
+        write_request = 1; 
+        read_request = 0;   // Ne asigurăm că e oprit
+        victim_dirty = 0;   // <--- IMPORTANT: Oprim forțat semnalul dirty de la Testul 3!
+        address = 32'h00002048; 
+        data_for_cpu_write = 32'hDEADBEEF; 
+
+        @(negedge clk);
+        cpu_request = 0;
+        // Punem tag-ul potrivit pe TOATE căile ca să fim 100% siguri că dă HIT pe ceva
+        tags_from_cache = {19'h00001, 19'h00001, 19'h00001, 19'h00001};
+        tags_delivered = 1;
+
+        @(negedge clk);
+        tags_delivered = 0;
+        
+        // FSM ar trebui să treacă acum corect în WRITE HIT (100)
+        @(negedge clk);
+        write_done_cache = 1; 
+
+        @(negedge clk);
+        write_done_cache = 0;
+        
         #50;
+        $display("\n========== TOATE TESTELE AU FOST EXECUTATE ==========");
         $stop;
     end
 
     // --- Monitorizare în consolă ---
     initial begin
-        $monitor("[CLK %0d] STATE=%b | REQ_TAGS=%b TAGS_DEL=%b REQ_BLK_RAM=%b REQ_BLK=%b DATA_READY=%b | addr=%h", 
-                 $time/10, uut.out_reg_current_state, request_memory_tags, tags_delivered, request_block_ram, request_block, data_ready, address);
+        $monitor("[CLK %0d] STATE=%b | REQ_TAGS=%b TAGS_DEL=%b REQ_BLK_RAM=%b REQ_BLK=%b DATA_READY=%b | addr=%h wire_tag=%h", 
+                 $time/10, uut.out_reg_current_state, request_memory_tags, tags_delivered, request_block_ram, request_block, data_ready, address, uut.wire_tag);
     end
 
 endmodule

@@ -80,17 +80,22 @@ not(neg_out_reg_current_state[2],out_reg_current_state[2]);
 
 //NEXT STATE
 wire [2:0]data_next_state;
+wire [2:0]state_input_cleared;
+//Reset Logic
+wire neg_reset;
+not(neg_reset,reset);
+
+and(state_input_cleared[0], data_next_state[0], neg_reset);
+and(state_input_cleared[1], data_next_state[1], neg_reset);
+and(state_input_cleared[2], data_next_state[2], neg_reset);
 
 register #(
 	.size_reg(3)
 )current_state(
-	.data(data_current_state),
+	.data(state_input_cleared),
 	.write_data(clk),
 	.out_reg(out_reg_current_state)
 );
-//Reset Logic
-wire neg_reset;
-not(neg_reset,reset);
 
 //Caz 1 reset == 1 => neq reset = 0,
 // 		deci data_current_state = fiecare bit & 0, adica transform toti bitii in 0
@@ -133,10 +138,17 @@ generate
         end
 endgenerate
 
+wire [31:0] address_to_reg;
+generate
+    for(j = 0; j < 32; j = j + 1) begin : clear_address
+        and(address_to_reg[j], address_mux_out[j], neg_reset);
+    end
+endgenerate
+
 register #(
 	.size_reg(32)
 ) address_reg(
-    .data(address_mux_out),
+    .data(address_to_reg),
     .write_data(clk),
     .out_reg(wire_address)
 );
@@ -383,10 +395,10 @@ generate
 endgenerate
 //conditia de a ramane in stare
 wire neg_data_ready;
-not(neg_data_ready,data_ready);
+not(neg_data_ready, data_ready);
 
 wire stay_read_hit;
-and(stay_read_hit, read_hit_state, neg_data_ready,neg_block_delivered);
+and(stay_read_hit, read_hit_state, neg_data_ready,  neg_block_delivered);
 //logica pentru a merge in idle
 wire back_to_idle_from_read_hit;
 and(back_to_idle_from_read_hit,read_hit_state, data_ready, block_delivered);
